@@ -1605,6 +1605,7 @@ kbd {
    CONTROLES TOUCH VIRTUAIS (Mobile / Tablet)
    ========================================================================== */
 .touch-controls-layer {
+  display: none !important; /* Remove todos os botões sobre a quadra; teclado continua funcionando. */
   position: absolute;
   bottom: 0;
   left: 0;
@@ -1616,6 +1617,10 @@ kbd {
   justify-content: space-between;
   align-items: flex-end;
   padding: 18px 24px;
+}
+
+.touch-dpad {
+  display: none !important; /* Remove as setas direcionais da tela da partida */
 }
 
 .touch-dpad, .touch-actions {

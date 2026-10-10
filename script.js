@@ -1248,7 +1248,8 @@
       if (ball.inPlay && ball.x > netX - 40) {
         // Bola está no campo da CPU ou vindo para ele
         const distToBall = ball.x - this.x;
-        const targetX = ball.x + (Math.sin(this.animFrame * 0.05) * errorMargin);
+        const leadFrames = Math.max(0, Math.min(10, Math.abs(ball.vx) * 0.65));
+        const targetX = ball.x + (ball.vx * leadFrames) + (Math.sin(this.animFrame * 0.05) * errorMargin);
 
         if (Math.abs(distToBall) > 18) {
           this.vx = Math.sign(targetX - this.x) * moveSpeed;
@@ -1267,13 +1268,22 @@
         }
 
         // Tentar Golpear a bola quando próxima
-        const dist = Math.hypot(ball.x - this.x, ball.y - (this.y - 40));
-        if (dist < 50 && this.stateTimer === 0) {
-          if (this.energy >= 100 && Math.random() < 0.8) {
+        // Janela de contato mais generosa: a IA precisa conseguir alcançar a bola
+        // mesmo quando a animação do salto ainda não chegou ao ponto mais alto.
+        const dist = Math.hypot(ball.x - this.x, ball.y - (this.y - 30));
+        // A CPU precisa primeiro recepcionar a bola; usa a mesma altura do hitbox
+        // do chute e uma margem maior para compensar a movimentação em pixels por frame.
+        if (dist < 72 && this.stateTimer === 0 && ball.x > netX + 8) {
+          // Prioriza um toque controlado e alto para devolver a bola por cima da rede.
+          // Cortadas para baixo eram disparadas cedo demais e faziam a CPU errar a rede.
+          if (this.energy >= 100 && dist < 48 && Math.random() < attackAggressiveness * 0.45) {
             this.performSpecialAttack(ball);
-          } else if (!this.isGrounded && ball.y < this.y - 30) {
-            this.performSmash(ball);
-          } else if (ball.y < this.y - 50) {
+            if (ball.lastHitBy === 'p2') {
+              ball.vx = -Math.max(9.5, Math.abs(ball.vx));
+              ball.vy = -Math.max(8.5, Math.abs(ball.vy));
+              ball.isSpecial = true;
+            }
+          } else if (ball.y < this.y - 52) {
             this.performHeader(ball);
           } else {
             this.performKick(ball, false);
@@ -1291,13 +1301,20 @@
     }
 
     performKick(ball, strong = false) {
+      // Hitbox mais generosa, principalmente no eixo vertical, para facilitar
+      // o contato com a bola durante a partida 2D.
+      const hitBoxCenterY = this.y - (this.isGrounded ? 34 : 48);
+      const dx = ball.x - this.x;
+      const dy = ball.y - hitBoxCenterY;
+      const dist = Math.hypot(dx, dy);
+      const hitRange = this.isAI ? 100 : (this.isGrounded ? 112 : 126);
+
+      // Não iniciar a animação nem bloquear novas tentativas se o chute não acertou.
+      if (dist >= hitRange || !ball.inPlay) return;
+
       this.state = 'kick';
-      this.stateTimer = 16;
-
-      const hitBoxCenterY = this.y - 30;
-      const dist = Math.hypot(ball.x - this.x, ball.y - hitBoxCenterY);
-
-      if (dist < 55) {
+      this.stateTimer = 12;
+      {
         audio.playKick(strong ? 1.3 : 1.0);
         particles.addHitImpact(ball.x, ball.y, strong);
 
@@ -1309,13 +1326,19 @@
         const powerMult = (this.cfg.power / 100) * 0.4 + 0.8;
         const dir = this.courtSide === 'left' ? 1 : -1;
 
-        if (this.isGrounded) {
-          ball.vx = dir * (8.5 * powerMult);
-          ball.vy = -9.5 * powerMult;
+        if (this.isAI) {
+          // A CPU deve conseguir passar a bola por cima da rede; não usar
+          // a trajetória descendente de smash, que frequentemente acertava a rede.
+          ball.vx = dir * (10.0 * powerMult);
+          ball.vy = -10.2 * powerMult;
+        } else if (this.isGrounded) {
+          ball.vx = dir * (9.0 * powerMult);
+          ball.vy = -10.0 * powerMult;
         } else {
-          // Shark Attack / Smash no ar!
-          ball.vx = dir * (11.0 * powerMult);
-          ball.vy = 4.5 * powerMult; // Corta para baixo!
+          // Chute no ar: ataque forte, mas com elevação suficiente para
+          // registrar o contato e permitir a continuidade da jogada.
+          ball.vx = dir * (10.5 * powerMult);
+          ball.vy = -4.0 * powerMult;
           audio.playSmash();
           saveSys.data.stats.smashes++;
           saveSys.unlockAchievement('shark_attack');
@@ -1334,7 +1357,7 @@
       const hitBoxCenterY = this.y - 75;
       const dist = Math.hypot(ball.x - this.x, ball.y - hitBoxCenterY);
 
-      if (dist < 55) {
+      if (dist < (this.isAI ? 82 : 55)) {
         audio.playHeader();
         particles.addHitImpact(ball.x, ball.y, false);
 
@@ -1346,8 +1369,8 @@
         const powerMult = (this.cfg.control / 100) * 0.3 + 0.85;
 
         // Cabeceio direcionado para os cantos
-        ball.vx = dir * (9.0 * powerMult);
-        ball.vy = -7.5 * powerMult;
+        ball.vx = dir * (this.isAI ? 10.0 * powerMult : 9.0 * powerMult);
+        ball.vy = -(this.isAI ? 10.0 : 7.5) * powerMult;
         ball.spin = -dir * 1.2;
 
         this.addEnergy(16);
@@ -1837,6 +1860,14 @@
     }
 
     update() {
+      // O loop principal também roda enquanto o menu está aberto. Antes do
+      // início da primeira partida, os atletas ainda não foram criados.
+      // Evita que uma exceção interrompa permanentemente o requestAnimationFrame.
+      if (!this.p1 || !this.p2) {
+        particles.update();
+        return;
+      }
+
       if (this.isPaused || this.isMatchOver) return;
 
       // Tremor de tela
